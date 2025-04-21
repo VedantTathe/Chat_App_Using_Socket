@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>3D Real-time Chat</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Animate.css -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css">
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body class="bg-gradient-to-br from-slate-100 to-blue-100 min-h-screen p-5 font-sans">
+    <div id="three-container" class="fixed top-0 left-0 w-full h-full z-0 opacity-30"></div>
+
+    <div class="relative z-10 max-w-7xl mx-auto">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div class="md:col-span-2">
+                <div class="bg-white shadow-lg rounded-2xl p-6 animate__animated animate__fadeIn">
+                    <h2 class="text-2xl font-bold mb-4 text-blue-700">3D Chat Room</h2>
+                    <div id="chat-container" class="h-[60vh] overflow-y-auto rounded-lg border p-4 bg-white space-y-4 animate__animated animate__fadeIn">
+                        <!-- Messages appear here -->
+                    </div>
+                    <div id="typing-indicator" class="text-gray-500 italic mt-2"></div>
+                    <div class="flex items-center gap-3 mt-4">
+                        <input id="message-input" type="text" placeholder="Type your message..." class="flex-grow border rounded-full px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"/>
+                        <button id="send-button" class="bg-blue-500 text-white p-3 rounded-full hover:bg-blue-600">
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div>
+                <div class="bg-white shadow-lg rounded-2xl p-6 animate__animated animate__fadeInRight">
+                    <h2 class="text-xl font-bold mb-4 text-blue-700">Online Users</h2>
+                    <div id="users-list" class="space-y-2">
+                        <!-- Users appear here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Socket.io & jQuery -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/js/materialize.min.js"></script>
+    
+    <script>
+        // Initialize Three.js background
+        function initThreeJS() {
+            const container = document.getElementById('three-container');
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+            
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            container.appendChild(renderer.domElement);
+            
+            // Create floating chat bubbles
+            const bubbles = [];
+            const bubbleGeometry = new THREE.SphereGeometry(0.5, 32, 32);
+            const bubbleMaterial = new THREE.MeshBasicMaterial({ 
+                color: 0xbbdefb,
+                transparent: true,
+                opacity: 0.6
+            });
+            
+            for (let i = 0; i < 15; i++) {
+                const bubble = new THREE.Mesh(bubbleGeometry, bubbleMaterial);
+                bubble.position.x = (Math.random() - 0.5) * 20;
+                bubble.position.y = (Math.random() - 0.5) * 20;
+                bubble.position.z = (Math.random() - 0.5) * 20;
+                bubble.userData = {
+                    speedX: Math.random() * 0.02 - 0.01,
+                    speedY: Math.random() * 0.02 - 0.01,
+                    speedZ: Math.random() * 0.02 - 0.01
+                };
+                scene.add(bubble);
+                bubbles.push(bubble);
+            }
+            
+            camera.position.z = 5;
+            
+            // Animation loop
+            function animate() {
+                requestAnimationFrame(animate);
+                
+                bubbles.forEach(bubble => {
+                    bubble.position.x += bubble.userData.speedX;
+                    bubble.position.y += bubble.userData.speedY;
+                    bubble.position.z += bubble.userData.speedZ;
+                    
+                    // Bounce off boundaries
+                    if (Math.abs(bubble.position.x) > 10) bubble.userData.speedX *= -1;
+                    if (Math.abs(bubble.position.y) > 10) bubble.userData.speedY *= -1;
+                    if (Math.abs(bubble.position.z) > 10) bubble.userData.speedZ *= -1;
+                    
+                    // Rotate bubbles
+                    bubble.rotation.x += 0.01;
+                    bubble.rotation.y += 0.01;
+                });
+                
+                renderer.render(scene, camera);
+            }
+            
+            animate();
+            
+            // Handle window resize
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+        }
+        
+        // Initialize the chat application
+        $(document).ready(function() {
+            initThreeJS();
+            M.AutoInit();
+            
+            const socket = io();
+            const chatContainer = $('#chat-container');
+            const messageInput = $('#message-input');
+            const sendButton = $('#send-button');
+            const typingIndicator = $('#typing-indicator');
+            const usersList = $('#users-list');
+            
+            // Generate a random color for the user
+            const userColor = '#' + Math.floor(Math.random()*16777215).toString(16);
+            
+            // Prompt for username with validation
+            let username;
+            while (!username || username.trim() === '') {
+                username = prompt('Enter your username (3-15 characters):');
+                if (username && username.trim().length < 3) {
+                    alert('Username must be at least 3 characters long');
+                    username = null;
+                }
+                if (username && username.trim().length > 15) {
+                    alert('Username must be no more than 15 characters');
+                    username = null;
+                }
+            }
+            username = username.trim();
+            
+            // Get first letter for avatar
+            const userAvatarLetter = username.charAt(0).toUpperCase();
+            
+            socket.emit('join', username);
+            
+            // Send message on button click or Enter key
+            sendButton.on('click', sendMessage);
+            messageInput.on('keypress', function(e) {
+                if (e.which === 13) sendMessage();
+            });
+            
+            // Typing indicator
+            let typingTimeout;
+            messageInput.on('input', function() {
+                socket.emit('typing');
+                clearTimeout(typingTimeout);
+                typingTimeout = setTimeout(() => {
+                    typingIndicator.text('');
+                }, 3000);
+            });
+            
+            function sendMessage() {
+                const message = messageInput.val().trim();
+                if (message) {
+                    socket.emit('send-message', message);
+                    addMessageToChat(username, message, true);
+                    messageInput.val('').focus();
+                }
+            }
+            
+            // Socket.io event listeners
+            socket.on('receive-message', function(data) {
+                if (data.username !== username) {
+                    addMessageToChat(data.username, data.message);
+                }
+            });
+            
+            socket.on('user-joined', function(username) {
+                addNotification(`${username} joined the chat`, 'animate__fadeInDown');
+            });
+            
+            socket.on('user-left', function(username) {
+                addNotification(`${username} left the chat`, 'animate__fadeOutUp');
+            });
+            
+            socket.on('user-typing', function(username) {
+                typingIndicator.text(`${username} is typing...`).addClass('animate__animated animate__fadeIn');
+                setTimeout(() => {
+                    typingIndicator.removeClass('animate__animated animate__fadeIn').addClass('animate__fadeOut');
+                    setTimeout(() => {
+                        typingIndicator.text('').removeClass('animate__fadeOut');
+                    }, 500);
+                }, 2000);
+            });
+            
+            socket.on('update-users', function(users) {
+                usersList.empty();
+                users.forEach(user => {
+                    const avatarLetter = user.charAt(0).toUpperCase();
+                    const userColor = '#' + Math.floor(Math.random()*16777215).toString(16);
+                    
+                    usersList.append(`
+                        <div class="collection-item avatar animate__animated animate__fadeIn">
+                            <div class="circle" style="background-color: ${userColor}">${avatarLetter}</div>
+                            <span class="title">${user}</span>
+                            <span class="secondary-content">
+                                <i class="material-icons green-text">circle</i>
+                            </span>
+                        </div>
+                    `);
+                });
+            });
+            
+            function addMessageToChat(username, message, isOwnMessage = false) {
+                const animationClass = isOwnMessage ? 'animate__fadeInRight' : 'animate__fadeInLeft';
+                const messageClass = isOwnMessage ? 'sent' : 'received';
+                const avatarLetter = username.charAt(0).toUpperCase();
+                const messageColor = isOwnMessage ? userColor : '#' + Math.floor(Math.random()*16777215).toString(16);
+                
+                const messageElement = $(`
+                    <div class="message ${messageClass} animate__animated ${animationClass}">
+                        ${!isOwnMessage ? `<div class="username" style="color: ${messageColor}">${username}</div>` : ''}
+                        <div class="message-text">${message}</div>
+                        ${isOwnMessage ? `<div class="message-time">${new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>` : ''}
+                    </div>
+                `);
+                
+                chatContainer.append(messageElement);
+                chatContainer.animate({ scrollTop: chatContainer[0].scrollHeight }, 500);
+                
+                // Remove animation class after animation completes
+                setTimeout(() => {
+                    messageElement.removeClass('animate__animated ' + animationClass);
+                }, 1000);
+            }
+            
+            function addNotification(text, animationClass = 'animate__fadeIn') {
+                const notificationElement = $(`
+                    <div class="notification animate__animated ${animationClass}">
+                        ${text}
+                    </div>
+                `);
+                
+                chatContainer.append(notificationElement);
+                chatContainer.animate({ scrollTop: chatContainer[0].scrollHeight }, 500);
+                
+                // Remove animation class after animation completes
+                setTimeout(() => {
+                    notificationElement.removeClass('animate__animated ' + animationClass);
+                }, 1000);
+            }
+        });
+    </script>
+</body>
+</html>
